@@ -1,0 +1,30 @@
+# Project Hermes - 依赖清单
+# Claude Code 远程异步指挥系统
+
+# 核心依赖
+pydantic>=2.0
+pydantic-settings>=2.0
+python-dotenv>=1.0
+
+# 邮件处理
+imap-tools>=0.5
+aioimaplib>=1.0  # 异步 IMAP 支持
+
+# 日志
+structlog>=24.0
+rich>=13.0
+
+# HTTP 客户端（用于第三方 LLM API）
+httpx>=0.25
+aiohttp>=3.9
+
+# 重试机制
+tenacity>=8.0
+
+# 异步支持
+asyncio>=3.4
+
+# 开发工具
+black>=23.0
+ruff>=0.1
+mypy>=1.0
