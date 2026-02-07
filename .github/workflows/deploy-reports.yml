@@ -1,0 +1,67 @@
+name: Deploy Task Reports
+
+on:
+  push:
+    paths:
+      - 'reports/**'
+    branches: [main]
+
+# 权限配置
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+# 限制并发
+concurrency:
+  group: "pages"
+  cancel-in-progress: false
+
+# 环境配置
+environment:
+  name: github-pages
+  url: ${{ steps.deployment.page }}
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    steps:
+      # 检出代码
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      # 设置 Pages
+      - name: Setup Pages
+        uses: actions/configure-pages@v4
+        with:
+          static_site: true
+
+      # 上传制品
+      - name: Upload artifact
+        uses: actions/upload-pages-artifact@v3
+        with:
+          path: 'reports/'
+
+      # 部署到 GitHub Pages
+      - name: Deploy to GitHub Pages
+        id: deployment
+        uses: actions/deploy-pages@v4
+
+  # 清理旧报告（每日执行）
+  cleanup:
+    runs-on: ubuntu-latest
+    if: github.event_name == 'schedule'
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Clean up old reports
+        run: |
+          # 清理 7 天前的报告
+          find reports -name "*.html" -mtime +7 -delete
+          echo "Cleaned up reports older than 7 days"

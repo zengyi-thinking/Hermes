@@ -10,7 +10,7 @@ from pathlib import Path
 from dataclasses import dataclass
 
 from ..llm.base import LLMClientProtocol
-from ..state.schemas import HermesState, RefinedResult
+from ..state.schemas import HermesState, RefinedResult, TaskUnderstandingResult
 
 
 # 常见错别字和技术术语纠正映射
@@ -127,13 +127,19 @@ class RefinerAgent:
             return p.read_text(encoding="utf-8")
         return ""
 
-    def refine(self, raw_prompt: str, state: HermesState) -> RefinedResult:
+    def refine(
+        self,
+        raw_prompt: str,
+        state: HermesState,
+        task_understanding: TaskUnderstandingResult = None
+    ) -> RefinedResult:
         """
         优化原始指令
 
         Args:
             raw_prompt: 用户原始指令
             state: 当前系统状态
+            task_understanding: 任务理解结果（可选）
 
         Returns:
             RefinedResult: 优化结果
@@ -142,7 +148,7 @@ class RefinerAgent:
         normalized_prompt = self._normalize_text(raw_prompt)
 
         # Step 2: 构建上下文
-        context = self._build_context(state)
+        context = self._build_context(state, task_understanding)
 
         # Step 3: 构建完整 Prompt
         full_prompt = self._build_refiner_prompt(normalized_prompt, context)
@@ -197,9 +203,21 @@ class RefinerAgent:
 
         return normalized.strip()
 
-    def _build_context(self, state: HermesState) -> str:
+    def _build_context(
+        self,
+        state: HermesState,
+        task_understanding: TaskUnderstandingResult = None
+    ) -> str:
         """构建上下文信息"""
         context_parts = []
+
+        # 如果有任务理解结果，优先使用
+        if task_understanding:
+            context_parts.append(f"[任务理解结果]")
+            context_parts.append(f"意图类型: {task_understanding.intent_type}")
+            context_parts.append(f"理解摘要: {task_understanding.understanding}")
+            context_parts.append(f"上下文摘要: {task_understanding.context_summary}")
+            context_parts.append("")
 
         # 系统状态
         context_parts.append(f"当前系统状态: {state.last_status}")

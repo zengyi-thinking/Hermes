@@ -217,8 +217,10 @@ class ClaudeExecutor:
 
             duration = (datetime.now() - start_time).total_seconds()
 
-            # 解析输出文件
-            output_files = self._extract_output_files(result.stdout + result.stderr)
+            # 解析输出文件（带类型）
+            output = result.stdout + result.stderr
+            created_files, modified_files, deleted_files = self._extract_file_changes(output)
+            all_files = created_files + modified_files + deleted_files
 
             return ExecutionResult(
                 success=result.returncode == 0,
@@ -226,7 +228,10 @@ class ClaudeExecutor:
                 stderr=result.stderr,
                 exit_code=result.returncode,
                 duration=duration,
-                output_files=output_files
+                output_files=all_files,
+                created_files=created_files,
+                modified_files=modified_files,
+                deleted_files=deleted_files
             )
 
         except subprocess.TimeoutExpired:
@@ -248,11 +253,22 @@ class ClaudeExecutor:
             )
 
     def _escape_arg(self, arg: str) -> str:
-        """转义参数"""
-        # 处理包含空格的参数
-        if ' ' in arg and not (arg.startswith('"') and arg.endswith('"')):
-            return f'"{arg}"'
-        return arg
+        """转义参数 - 确保在 bash 中安全执行"""
+        if not arg:
+            return arg
+
+        # 使用 $'...' 语法转义特殊字符
+        # 这个语法可以处理引号、换行等特殊字符
+        escaped = arg.replace('\\', '\\\\')
+        escaped = escaped.replace("'", "\\'")
+        escaped = escaped.replace('"', '\\"')
+        escaped = escaped.replace('`', '\\`')
+        escaped = escaped.replace('$', '\\$')
+        escaped = escaped.replace('\n', '\\n')
+        escaped = escaped.replace('\r', '\\r')
+        escaped = escaped.replace('\t', '\\t')
+
+        return f"$'{escaped}'"
 
     def _to_bash_path(self, windows_path: str) -> str:
         """将 Windows 路径转换为 git-bash 路径格式"""
@@ -289,23 +305,71 @@ class ClaudeExecutor:
         return cmd
 
     def _extract_output_files(self, output: str) -> list:
-        """从输出中提取生成的文件"""
-        files = []
+        """从输出中提取生成的文件（兼容旧接口）"""
+        created, modified, deleted = self._extract_file_changes(output)
+        return created + modified + deleted
 
-        # 匹配常见的文件创建提示
-        patterns = [
-            r'[Cc]reated\s+([^\s]+)',
+    def _extract_file_changes(self, output: str) -> tuple:
+        """
+        从输出中提取带类型的文件变更
+
+        Returns:
+            tuple: (created_files, modified_files, deleted_files)
+        """
+        created = []
+        modified = []
+        deleted = []
+
+        # 创建模式
+        created_patterns = [
+            r'[Cc]reated\s+[\'"]?([^\s\'"\'")]+\.[a-zA-Z0-9_]+[\'"]?',
+            r'[Nn]ew\s+file[:\s]+([^\s]+)',
             r'[Ww]rote\s+to\s+([^\s]+)',
             r'[Ss]aved\s+([^\s]+)',
-            r'[Mm]odified\s+([^\s]+)',
+            r'([a-zA-Z0-9_\-/]+\.[a-zA-Z0-9_]+)\s+created',
         ]
 
-        for pattern in patterns:
+        # 修改模式
+        modified_patterns = [
+            r'[Mm]odified\s+([^\s]+)',
+            r'[Uu]pdated\s+([^\s]+)',
+            r'[Cc]hanged\s+([^\s]+)',
+        ]
+
+        # 删除模式
+        deleted_patterns = [
+            r'[Dd]eleted\s+([^\s]+)',
+            r'[Rr]emoved\s+([^\s]+)',
+        ]
+
+        for pattern in created_patterns:
             matches = re.findall(pattern, output)
-            files.extend(matches)
+            for match in matches:
+                # 清理匹配结果
+                file_path = match.strip().strip("'\"")
+                if file_path and not file_path.startswith('http'):
+                    created.append(file_path)
+
+        for pattern in modified_patterns:
+            matches = re.findall(pattern, output)
+            for match in matches:
+                file_path = match.strip().strip("'\"")
+                if file_path and not file_path.startswith('http'):
+                    modified.append(file_path)
+
+        for pattern in deleted_patterns:
+            matches = re.findall(pattern, output)
+            for match in matches:
+                file_path = match.strip().strip("'\"")
+                if file_path and not file_path.startswith('http'):
+                    deleted.append(file_path)
 
         # 去重
-        return list(set(files))
+        created = list(dict.fromkeys(created))
+        modified = list(dict.fromkeys(modified))
+        deleted = list(dict.fromkeys(deleted))
+
+        return created, modified, deleted
 
     async def execute_async(
         self,

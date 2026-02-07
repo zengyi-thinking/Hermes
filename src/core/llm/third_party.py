@@ -1,9 +1,10 @@
 """
 第三方 LLM API 适配器
 """
+import asyncio
 import json
 import re
-from typing import Optional
+from typing import Any, Callable, Dict, Optional
 
 import httpx
 from tenacity import retry, stop_after_attempt, wait_exponential, retry_if_exception_type
@@ -37,6 +38,60 @@ class ThirdPartyLLMClient(BaseLLMClient):
     def close(self):
         """关闭 HTTP 客户端"""
         self.http_client.close()
+
+    async def complete_stream(
+        self,
+        system_prompt: str,
+        user_prompt: str,
+        on_chunk: Callable[[str], Any],
+        temperature: float = None,
+        max_tokens: int = None
+    ) -> str:
+        """
+        流式生成响应
+
+        Args:
+            system_prompt: 系统提示
+            user_prompt: 用户提示
+            on_chunk: 每个 chunk 时的回调函数
+            temperature: 温度参数
+            max_tokens: 最大输出 tokens
+
+        Returns:
+            完整的响应内容
+        """
+        temp, tokens = self._merge_params(temperature, max_tokens)
+        payload = self._build_payload(system_prompt, user_prompt, temp, tokens)
+
+        # 尝试使用 SSE 流式响应
+        try:
+            return await self._send_stream_request(payload, on_chunk)
+        except NotImplementedError:
+            # 如果子类不支持流式，回退到普通请求
+            response = await self._send_request_async(payload)
+            content = self._parse_response(response).content
+            on_chunk(content)
+            return content
+
+    async def _send_stream_request(
+        self,
+        payload: dict,
+        on_chunk: Callable[[str], Any]
+    ) -> str:
+        """发送流式请求（子类可重写）"""
+        raise NotImplementedError("子类需要实现流式响应")
+
+    async def _send_request_async(self, payload: dict) -> dict:
+        """发送异步 HTTP 请求"""
+        async with httpx.AsyncClient(timeout=self.timeout) as client:
+            headers = self._get_headers()
+            response = await client.post(
+                self.base_url,
+                json=payload,
+                headers=headers
+            )
+            response.raise_for_status()
+            return response.json()
 
     def complete(
         self,
@@ -167,6 +222,51 @@ class MinimaxClient(ThirdPartyLLMClient):
 
         return content
 
+    async def _send_stream_request(
+        self,
+        payload: dict,
+        on_chunk: Callable[[str], Any]
+    ) -> str:
+        """Minimax 流式请求实现"""
+        headers = {
+            "Authorization": f"Bearer {self.api_key}",
+            "Content-Type": "application/json",
+            "Accept": "text/event-stream"
+        }
+
+        async with httpx.AsyncClient(timeout=self.timeout) as client:
+            async with client.stream(
+                "POST",
+                self.base_url,
+                json=payload,
+                headers=headers
+            ) as response:
+                response.raise_for_status()
+
+                full_content = ""
+                async for line in response.aiter_lines():
+                    if line.startswith("data: "):
+                        data = line[6:]
+                        try:
+                            data_obj = json.loads(data)
+                            if "choices" in data_obj:
+                                choice = data_obj["choices"][0]
+                                delta = choice.get("delta", {})
+                                chunk = delta.get("content", "")
+                                if chunk:
+                                    full_content += chunk
+                                    on_chunk(chunk)
+                            elif "content" in data_obj:
+                                # 可能直接返回 content
+                                chunk = data_obj["content"]
+                                if chunk:
+                                    full_content += chunk
+                                    on_chunk(chunk)
+                        except json.JSONDecodeError:
+                            continue
+
+                return full_content
+
 
 class GLMClient(ThirdPartyLLMClient):
     """智谱 GLM API 客户端"""
@@ -211,6 +311,45 @@ class GLMClient(ThirdPartyLLMClient):
         content = re.sub(r'\s*```$', '', content, flags=re.MULTILINE)
         return content.strip()
 
+    async def _send_stream_request(
+        self,
+        payload: dict,
+        on_chunk: Callable[[str], Any]
+    ) -> str:
+        """GLM 流式请求实现"""
+        headers = {
+            "Authorization": f"Bearer {self.api_key}",
+            "Content-Type": "application/json"
+        }
+
+        async with httpx.AsyncClient(timeout=self.timeout) as client:
+            async with client.stream(
+                "POST",
+                self.base_url,
+                json=payload,
+                headers=headers
+            ) as response:
+                response.raise_for_status()
+
+                full_content = ""
+                async for line in response.aiter_lines():
+                    if line.startswith("data: "):
+                        data = line[6:]
+                        if data == "[DONE]":
+                            break
+                        try:
+                            data_obj = json.loads(data)
+                            choice = data_obj.get("choices", [{}])[0]
+                            delta = choice.get("delta", {})
+                            chunk = delta.get("content", "")
+                            if chunk:
+                                full_content += chunk
+                                on_chunk(chunk)
+                        except json.JSONDecodeError:
+                            continue
+
+                return full_content
+
 
 class OpenAIClient(ThirdPartyLLMClient):
     """OpenAI 兼容 API 客户端"""
@@ -244,6 +383,45 @@ class OpenAIClient(ThirdPartyLLMClient):
             finish_reason=choice.get("finish_reason"),
             raw_response=response
         )
+
+    async def _send_stream_request(
+        self,
+        payload: dict,
+        on_chunk: Callable[[str], Any]
+    ) -> str:
+        """OpenAI 兼容接口流式请求实现"""
+        headers = {
+            "Authorization": f"Bearer {self.api_key}",
+            "Content-Type": "application/json"
+        }
+
+        async with httpx.AsyncClient(timeout=self.timeout) as client:
+            async with client.stream(
+                "POST",
+                self.base_url,
+                json=payload,
+                headers=headers
+            ) as response:
+                response.raise_for_status()
+
+                full_content = ""
+                async for line in response.aiter_lines():
+                    if line.startswith("data: "):
+                        data = line[6:]
+                        if data == "[DONE]":
+                            break
+                        try:
+                            data_obj = json.loads(data)
+                            choice = data_obj.get("choices", [{}])[0]
+                            delta = choice.get("delta", {})
+                            chunk = delta.get("content", "")
+                            if chunk:
+                                full_content += chunk
+                                on_chunk(chunk)
+                        except json.JSONDecodeError:
+                            continue
+
+                return full_content
 
 
 def create_llm_client(
