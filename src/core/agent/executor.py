@@ -144,7 +144,7 @@ class ClaudeExecutor:
         Args:
             prompt: 要执行的指令
             work_dir: 工作目录
-            timeout: 超时时间（秒）
+            timeout: 超时时间（秒）- 为 None 时使用 ProcessHealthMonitor 控制，不再强制超时
             session_name: 会话名称（用于恢复上下文）
 
         Returns:
@@ -153,7 +153,8 @@ class ClaudeExecutor:
         start_time = datetime.now()
 
         work_dir = Path(work_dir) if work_dir else Path(self.config.work_dir)
-        timeout = timeout or self.config.timeout
+        # timeout=None 表示由健康监控器控制，不使用固定超时
+        timeout = timeout if timeout is not None else self.config.timeout
 
         # 构建命令
         cmd = self._build_command(prompt, session_name)

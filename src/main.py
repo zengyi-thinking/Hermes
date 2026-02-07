@@ -34,6 +34,13 @@ from src.core.skills import SkillRegistry, register_builtin_skills
 from src.core.skills.base import SkillResult
 from src.core.session import SessionManager, SessionStatus
 
+# 监督器模块
+from src.core.supervisor import ExecutionMonitor, ExecutionPhase, RegexValidator, FileExistsValidator
+from src.core.supervisor.health_monitor import ProcessHealthMonitor, HealthMonitorConfig
+from src.core.memory import ShortTermMemory, LongTermMemory, MemoryRetriever, UserPreference
+from src.core.reporters.task_doc_generator import TaskDocGenerator, create_task_doc_from_result
+from src.core.hooks import HookGenerator
+
 
 class HermesApplication:
     def __init__(self):
@@ -129,6 +136,18 @@ class HermesApplication:
         # ========== 初始化 Skills 技能系统 ==========
         self._init_skills_system()
 
+        # ========== 初始化监督器系统 ==========
+        self._init_supervisor_system()
+
+        # ========== 初始化记忆系统 ==========
+        self._init_memory_system()
+
+        # ========== 初始化文档生成器 ==========
+        self._init_doc_generator()
+
+        # ========== 初始化钩子系统 ==========
+        self._init_hooks_system()
+
     def _init_skills_system(self):
         """初始化 Skills 技能系统"""
         self.log.info("=" * 50)
@@ -152,6 +171,102 @@ class HermesApplication:
             self.log.info("=" * 50)
         except Exception as e:
             self.log.error(f"❌ Skills System Init Failed: {e}")
+            self.log.info("=" * 50)
+
+    def _init_supervisor_system(self):
+        """初始化监督器系统"""
+        self.log.info("=" * 50)
+        self.log.info("📊 INITIALIZING SUPERVISOR SYSTEM")
+        self.log.info("=" * 50)
+
+        try:
+            # 初始化执行监督器
+            self.execution_monitor = ExecutionMonitor(
+                logger=self.log,
+                channel_adapter=self.telegram_channel,
+                channel="telegram"
+            )
+            self.log.info("   ✅ ExecutionMonitor 已初始化")
+
+            # 初始化健康监控器
+            self.health_monitor = ProcessHealthMonitor(
+                channel_adapter=self.telegram_channel,
+                config=HealthMonitorConfig(
+                    enable_notification=self.telegram_channel is not None
+                ),
+                logger=self.log
+            )
+            self.log.info("   ✅ ProcessHealthMonitor 已初始化 (智能超时，无固定限制)")
+
+            self.log.info("=" * 50)
+            self.log.info("✅ Supervisor System Initialized Successfully")
+            self.log.info("=" * 50)
+        except Exception as e:
+            self.log.error(f"❌ Supervisor System Init Failed: {e}")
+            self.log.info("=" * 50)
+
+    def _init_memory_system(self):
+        """初始化记忆系统"""
+        self.log.info("=" * 50)
+        self.log.info("🧠 INITIALIZING MEMORY SYSTEM")
+        self.log.info("=" * 50)
+
+        try:
+            # 初始化长期记忆
+            self.long_term_memory = LongTermMemory(
+                storage_dir="./memory",
+                default_ttl_days=90
+            )
+            self.log.info("   ✅ LongTermMemory 已初始化")
+
+            # 初始化记忆检索器
+            self.memory_retriever = MemoryRetriever()
+            self.log.info("   ✅ MemoryRetriever 已初始化")
+
+            self.log.info("=" * 50)
+            self.log.info("✅ Memory System Initialized Successfully")
+            self.log.info("=" * 50)
+        except Exception as e:
+            self.log.error(f"❌ Memory System Init Failed: {e}")
+            self.log.info("=" * 50)
+
+    def _init_doc_generator(self):
+        """初始化文档生成器"""
+        self.log.info("=" * 50)
+        self.log.info("📄 INITIALIZING DOCUMENT GENERATOR")
+        self.log.info("=" * 50)
+
+        try:
+            # 初始化任务文档生成器
+            self.task_doc_generator = TaskDocGenerator(
+                tasks_dir="./tasks",
+                project_root="."
+            )
+            self.log.info("   ✅ TaskDocGenerator 已初始化")
+
+            self.log.info("=" * 50)
+            self.log.info("✅ Document Generator Initialized Successfully")
+            self.log.info("=" * 50)
+        except Exception as e:
+            self.log.error(f"❌ Document Generator Init Failed: {e}")
+            self.log.info("=" * 50)
+
+    def _init_hooks_system(self):
+        """初始化钩子系统"""
+        self.log.info("=" * 50)
+        self.log.info("🪝 INITIALIZING HOOKS SYSTEM")
+        self.log.info("=" * 50)
+
+        try:
+            # 初始化钩子生成器
+            self.hook_generator = HookGenerator(project_root=".")
+            self.log.info("   ✅ HookGenerator 已初始化")
+
+            self.log.info("=" * 50)
+            self.log.info("✅ Hooks System Initialized Successfully")
+            self.log.info("=" * 50)
+        except Exception as e:
+            self.log.error(f"❌ Hooks System Init Failed: {e}")
             self.log.info("=" * 50)
 
     # ==================== Skills 技能系统 ====================
@@ -190,7 +305,7 @@ class HermesApplication:
 
         return None, None
 
-    async def _execute_skill(self, skill_name: str, args: dict) -> str:
+    async def _execute_skill(self, skill_name: str, args: dict | None) -> str:
         """
         执行技能并返回结果
 
@@ -206,11 +321,12 @@ class HermesApplication:
         self.log.info("🔧 SKILL EXECUTION STARTED")
         self.log.info("=" * 50)
         self.log.info(f"   [SKILL] Name: {skill_name}")
-        self.log.info(f"   [SKILL] Arguments: {args}")
+        normalized_args = args if isinstance(args, dict) else {}
+        self.log.info(f"   [SKILL] Arguments: {normalized_args}")
         self.log.info("-" * 50)
 
         try:
-            result = SkillRegistry.execute(skill_name, **args)
+            result = SkillRegistry.execute(skill_name, **normalized_args)
 
             # ========== 技能执行结果日志 ==========
             self.log.info("-" * 50)
@@ -355,9 +471,6 @@ class HermesApplication:
         if skill_name:
             self.log.info("   [STATUS] Skill detected ✅ - Will execute")
             self.log.info("=" * 50)
-        else:
-            self.log.info("   [STATUS] No skill detected - Normal task flow")
-            self.log.info("=" * 50)
 
             # 检查是否需要审批
             if SkillRegistry.require_approval(skill_name):
@@ -378,7 +491,8 @@ class HermesApplication:
             # 同步执行技能（简化处理）
             import asyncio
             try:
-                result_text = asyncio.run(self._execute_skill(skill_name, skill_args))
+                safe_skill_args = skill_args if isinstance(skill_args, dict) else {}
+                result_text = asyncio.run(self._execute_skill(skill_name, safe_skill_args))
                 self.telegram_channel.send_markdown(
                     message.metadata.get("chat_id", message.sender),
                     result_text
@@ -387,6 +501,9 @@ class HermesApplication:
                 return
             except Exception as e:
                 self.log.error("技能执行失败: {}".format(e))
+        else:
+            self.log.info("   [STATUS] No skill detected - Normal task flow")
+            self.log.info("=" * 50)
 
         # ========== 正常任务处理流程 ==========
         # 记录任务来源是 Telegram
@@ -664,11 +781,49 @@ class HermesApplication:
             import time
             time.sleep(2)
 
-            # 执行
-            exec_result = self.executor.execute(
-                refined.refined_prompt,
-                self.settings.claude.work_dir,
-                self.settings.claude.timeout
+            # ========== 使用监督器执行任务 ==========
+            self.log.info("=" * 60)
+            self.log.info("📊 使用健康监控执行（无固定超时）")
+            self.log.info("=" * 60)
+
+            # 创建验证器
+            validators = [
+                FileExistsValidator(work_dir=self.settings.claude.work_dir)
+            ]
+
+            # 准备任务信息（用于通知）
+            chat_id = None
+            if task_info.metadata and "tg_message" in task_info.metadata:
+                tg_msg = task_info.metadata.get("tg_message")
+                chat_id = tg_msg.metadata.get("chat_id", tg_msg.sender) if tg_msg else None
+
+            task_exec_info = {
+                "task_id": task_info.task_id,
+                "task_type": refined.intent_type,
+                "chat_id": chat_id
+            }
+
+            # 使用健康监控执行（无固定超时）
+            monitored_result = self.health_monitor.execute_with_health_monitoring(
+                executor=self.executor,
+                prompt=refined.refined_prompt,
+                work_dir=self.settings.claude.work_dir,
+                validators=validators,
+                task_info=task_exec_info
+            )
+
+            # 转换为标准执行结果格式
+            exec_result = ExecutionResult(
+                success=monitored_result.success,
+                stdout=monitored_result.stdout,
+                stderr=monitored_result.stderr,
+                exit_code=monitored_result.exit_code,
+                duration=monitored_result.duration,
+                output_files=monitored_result.output_files,
+                created_files=monitored_result.created_files,
+                modified_files=monitored_result.modified_files,
+                deleted_files=monitored_result.deleted_files,
+                error=monitored_result.error
             )
 
             # 记录详细执行结果
@@ -685,14 +840,18 @@ class HermesApplication:
                 preview = exec_result.stderr[:100].replace('\n', ' ')
                 self.log.info("stderr预览: {}...".format(preview))
 
-            # 超时智能处理
+            # 超时智能处理（健康监控版本）
             if not exec_result.success and exec_result.error:
-                if "timed out" in exec_result.error.lower():
-                    self.log.info("检测到超时，检查是否有输出...")
+                error_lower = exec_result.error.lower()
+                if "timed out" in error_lower or "无响应" in exec_result.error:
+                    self.log.info("检测到执行中断，检查是否有输出...")
                     if exec_result.stdout and len(exec_result.stdout.strip()) > 0:
                         exec_result.success = True
                         exec_result.error = ""
-                        self.log.info("实际已完成，忽略超时")
+                        self.log.info("实际已完成，忽略中断")
+                    else:
+                        # 健康监控触发的中断
+                        self.log.warning("进程无响应，已被健康监控系统中断")
 
             elapsed = exec_result.duration if hasattr(exec_result, 'duration') else 0
             self.log.info("完成: {}, {}秒".format(exec_result.success, elapsed))
@@ -755,11 +914,11 @@ class HermesApplication:
                 self._reply_to_user(task_info, "任务完成\n\n{}{}{}".format(output, file_info, report_info))
             else:
                 error_msg = exec_result.stderr or exec_result.error or "执行失败"
-                is_timeout = "timed out" in error_msg.lower() and exec_result.stdout
+                is_timeout = ("timed out" in error_msg.lower() or "无响应" in error_msg) and exec_result.stdout
                 if is_timeout:
                     output = exec_result.stdout.strip() if exec_result.stdout else ""
                     if output:
-                        self._reply_to_user(task_info, "部分完成（超时）\n\n{}".format(output[:3000]))
+                        self._reply_to_user(task_info, "部分完成（进程中断）\n\n{}".format(output[:3000]))
                     else:
                         self._reply_to_user(task_info, "任务超时")
                 else:
@@ -773,6 +932,65 @@ class HermesApplication:
             for f in (exec_result.output_files or []):
                 self.state_manager.add_file_change(f, "modified", "Claude")
 
+            # ========== 生成任务 Markdown 文档 ==========
+            self._generate_task_document(task_info, refined, exec_result)
+
+            # ========== 保存交互到长期记忆 ==========
+            self._save_to_memory(task_info, exec_result)
+
+        except Exception as e:
+            self.log.error("任务处理失败: {}".format(e))
+            self._reply_to_user(task_info, "处理任务失败: {}".format(str(e)[:500]))
+            self.state_manager.record_error(str(e))
+            self.state_manager.update_task_status(task_info.task_id, TaskStatus.FAILED.value)
+
+    def _generate_task_document(self, task_info, refined, exec_result):
+        """生成任务 Markdown 文档"""
+        try:
+            doc_path = create_task_doc_from_result(
+                task_id=task_info.task_id,
+                original_prompt=task_info.original_prompt,
+                refined_prompt=refined.refined_prompt,
+                exec_result=exec_result,
+                task_info=task_info,
+                tasks_dir="./tasks",
+                project_root="."
+            )
+            self.log.info("📄 任务文档已生成: {}".format(doc_path))
+        except Exception as doc_err:
+            self.log.error("生成任务文档失败: {}".format(doc_err))
+
+    def _save_to_memory(self, task_info, exec_result):
+        """保存交互到长期记忆"""
+        try:
+            # 获取用户 ID
+            user_id = task_info.sender or "unknown"
+
+            # 获取会话 ID
+            session_id = task_info.metadata.get("session_id", "") if task_info.metadata else ""
+
+            # 创建交互历史
+            from src.core.memory.long_term import InteractionHistory
+            history = InteractionHistory(
+                session_id=task_info.task_id,
+                user_id=user_id,
+                task_summary=task_info.original_prompt[:200],
+                outcome="success" if exec_result.success else "failed",
+                file_changes={
+                    "created": exec_result.created_files or [],
+                    "modified": exec_result.modified_files or []
+                },
+                duration_seconds=exec_result.duration
+            )
+
+            # 保存到长期记忆
+            if hasattr(self, 'long_term_memory'):
+                self.long_term_memory.add_history(history)
+
+            self.log.info("🧠 交互历史已保存到记忆系统")
+        except Exception as mem_err:
+            self.log.error("保存到记忆失败: {}".format(mem_err))
+
     def _handle_execution_result(
         self,
         task_info: TaskInfo,
@@ -782,108 +1000,113 @@ class HermesApplication:
         """
         处理执行结果（回复用户、生成报告等）
         """
-        # 记录详细执行结果
-        stdout_len = len(exec_result.stdout) if exec_result.stdout else 0
-        stderr_len = len(exec_result.stderr) if exec_result.stderr else 0
-        self.log.info("执行结果: success={}, exit_code={}, stdout_len={}, stderr_len={}".format(
-            exec_result.success, getattr(exec_result, 'exit_code', 'N/A'), stdout_len, stderr_len))
+        try:
+            # 记录详细执行结果
+            stdout_len = len(exec_result.stdout) if exec_result.stdout else 0
+            stderr_len = len(exec_result.stderr) if exec_result.stderr else 0
+            self.log.info("执行结果: success={}, exit_code={}, stdout_len={}, stderr_len={}".format(
+                exec_result.success, getattr(exec_result, 'exit_code', 'N/A'), stdout_len, stderr_len))
 
-        # 直接打印内容摘要
-        if exec_result.stdout:
-            preview = exec_result.stdout[:100].replace('\n', ' ')
-            self.log.info("stdout预览: {}...".format(preview))
-        if exec_result.stderr:
-            preview = exec_result.stderr[:100].replace('\n', ' ')
-            self.log.info("stderr预览: {}...".format(preview))
+            # 直接打印内容摘要
+            if exec_result.stdout:
+                preview = exec_result.stdout[:100].replace('\n', ' ')
+                self.log.info("stdout预览: {}...".format(preview))
+            if exec_result.stderr:
+                preview = exec_result.stderr[:100].replace('\n', ' ')
+                self.log.info("stderr预览: {}...".format(preview))
 
-        # 超时智能处理
-        if not exec_result.success and exec_result.error:
-            if "timed out" in exec_result.error.lower():
-                self.log.info("检测到超时，检查是否有输出...")
-                if exec_result.stdout and len(exec_result.stdout.strip()) > 0:
-                    exec_result.success = True
-                    exec_result.error = ""
-                    self.log.info("实际已完成，忽略超时")
+            # 超时智能处理（健康监控版本）
+            if not exec_result.success and exec_result.error:
+                error_lower = exec_result.error.lower()
+                if "timed out" in error_lower or "无响应" in exec_result.error:
+                    self.log.info("检测到执行中断，检查是否有输出...")
+                    if exec_result.stdout and len(exec_result.stdout.strip()) > 0:
+                        exec_result.success = True
+                        exec_result.error = ""
+                        self.log.info("实际已完成，忽略中断")
+                    else:
+                        # 健康监控触发的中断
+                        self.log.warning("进程无响应，已被健康监控系统中断")
 
-        elapsed = exec_result.duration if hasattr(exec_result, 'duration') else 0
-        self.log.info("完成: {}, {}秒".format(exec_result.success, elapsed))
+            elapsed = exec_result.duration if hasattr(exec_result, 'duration') else 0
+            self.log.info("完成: {}, {}秒".format(exec_result.success, elapsed))
 
-        # 回复用户（通过原渠道）
-        if exec_result.success:
-            output = exec_result.stdout.strip() if exec_result.stdout else "任务完成"
+            # 回复用户（通过原渠道）
+            if exec_result.success:
+                output = exec_result.stdout.strip() if exec_result.stdout else "任务完成"
 
-            # 检查文件是否创建
-            output_files = exec_result.output_files or []
-            if output_files:
-                file_info = "\n已创建文件：\n" + "\n".join("- " + f for f in output_files)
-            else:
-                file_info = ""
-
-            # ========== 生成 HTML 报告（回复之前生成） ==========
-            report_path = None
-            try:
-                # 创建 RefinedResult 对象用于报告生成
-                refined_result = RefinedResult(
-                    refined_prompt=original_task.refined_prompt if original_task else "",
-                    confidence=original_task.confidence if original_task else 0.0,
-                    intent_type="continue" if original_task else "new_task"
-                )
-
-                # 使用 original_task 或 task_info 作为任务信息
-                report_task = original_task or task_info
-
-                # 生成 HTML 报告
-                report_path = self.html_generator.generate(
-                    task=report_task,
-                    refined=refined_result,
-                    exec_result=exec_result
-                )
-                self.log.info("HTML 报告已生成: {}".format(report_path))
-
-                # 如果是 GitHub Pages 模式，推送到 GitHub
-                if self.github_pusher:
-                    github_url, success = self.github_pusher.push_report_file(
-                        file_path=report_path,
-                        task_id=report_task.task_id
-                    )
-                    if success:
-                        self.log.info("报告已推送到 GitHub: {}".format(github_url))
-                        report_task.report_url = github_url
-            except Exception as report_err:
-                self.log.error("生成报告失败: {}".format(report_err))
-
-            # Telegram 消息长度限制
-            if len(output) + len(file_info) > 3000:
-                output = output[:2500] + "\n\n...（详细内容见附件）"
-
-            # 添加报告链接
-            report_info = ""
-            if original_task and hasattr(original_task, 'report_url') and original_task.report_url:
-                report_info = "\n\n📊 完整报告: {}".format(original_task.report_url)
-            elif report_path:
-                report_info = "\n\n📊 报告文件: {}".format(str(report_path))
-
-            self._reply_to_user(task_info, "任务完成\n\n{}{}{}".format(output, file_info, report_info))
-        else:
-            error_msg = exec_result.stderr or exec_result.error or "执行失败"
-            is_timeout = "timed out" in error_msg.lower() and exec_result.stdout
-            if is_timeout:
-                output = exec_result.stdout.strip() if exec_result.stdout else ""
-                if output:
-                    self._reply_to_user(task_info, "部分完成（超时）\n\n{}".format(output[:3000]))
+                # 检查文件是否创建
+                output_files = exec_result.output_files or []
+                if output_files:
+                    file_info = "\n已创建文件：\n" + "\n".join("- " + f for f in output_files)
                 else:
-                    self._reply_to_user(task_info, "任务超时")
-            else:
-                self._reply_to_user(task_info, "任务失败\n\n{}".format(error_msg[:500]))
+                    file_info = ""
 
-        # 更新原始任务状态
-        if original_task:
-            self.state_manager.update_task_status(
-                original_task.task_id,
-                TaskStatus.COMPLETED.value if exec_result.success else TaskStatus.FAILED.value
-            )
-            for f in (exec_result.output_files or []):
-                self.state_manager.add_file_change(f, "modified", "Claude")
+                # ========== 生成 HTML 报告（回复之前生成） ==========
+                report_path = None
+                try:
+                    # 创建 RefinedResult 对象用于报告生成
+                    refined_result = RefinedResult(
+                        refined_prompt=original_task.refined_prompt if original_task else "",
+                        confidence=original_task.confidence if original_task else 0.0,
+                        intent_type="continue" if original_task else "new_task"
+                    )
+
+                    # 使用 original_task 或 task_info 作为任务信息
+                    report_task = original_task or task_info
+
+                    # 生成 HTML 报告
+                    report_path = self.html_generator.generate(
+                        task=report_task,
+                        refined=refined_result,
+                        exec_result=exec_result
+                    )
+                    self.log.info("HTML 报告已生成: {}".format(report_path))
+
+                    # 如果是 GitHub Pages 模式，推送到 GitHub
+                    if self.github_pusher:
+                        github_url, success = self.github_pusher.push_report_file(
+                            file_path=report_path,
+                            task_id=report_task.task_id
+                        )
+                        if success:
+                            self.log.info("报告已推送到 GitHub: {}".format(github_url))
+                            report_task.report_url = github_url
+                except Exception as report_err:
+                    self.log.error("生成报告失败: {}".format(report_err))
+
+                # Telegram 消息长度限制
+                if len(output) + len(file_info) > 3000:
+                    output = output[:2500] + "\n\n...（详细内容见附件）"
+
+                # 添加报告链接
+                report_info = ""
+                if original_task and hasattr(original_task, 'report_url') and original_task.report_url:
+                    report_info = "\n\n📊 完整报告: {}".format(original_task.report_url)
+                elif report_path:
+                    report_info = "\n\n📊 报告文件: {}".format(str(report_path))
+
+                self._reply_to_user(task_info, "任务完成\n\n{}{}{}".format(output, file_info, report_info))
+            else:
+                error_msg = exec_result.stderr or exec_result.error or "执行失败"
+                is_timeout = ("timed out" in error_msg.lower() or "无响应" in error_msg) and exec_result.stdout
+                if is_timeout:
+                    output = exec_result.stdout.strip() if exec_result.stdout else ""
+                    if output:
+                        self._reply_to_user(task_info, "部分完成（进程中断）\n\n{}".format(output[:3000]))
+                    else:
+                        self._reply_to_user(task_info, "任务超时")
+                else:
+                    self._reply_to_user(task_info, "任务失败\n\n{}".format(error_msg[:500]))
+
+            # 更新原始任务状态
+            if original_task:
+                self.state_manager.update_task_status(
+                    original_task.task_id,
+                    TaskStatus.COMPLETED.value if exec_result.success else TaskStatus.FAILED.value
+                )
+                for f in (exec_result.output_files or []):
+                    self.state_manager.add_file_change(f, "modified", "Claude")
 
         except Exception as e:
             self.log.error("处理失败: {}".format(e))

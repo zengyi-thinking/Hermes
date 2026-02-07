@@ -24,6 +24,13 @@ tenacity>=8.0
 # 异步支持
 asyncio>=3.4
 
+# 报告生成
+jinja2>=3.1
+requests>=2.31
+
+# 系统信息获取（Skills 模块）
+psutil>=5.9
+
 # 开发工具
 black>=23.0
 ruff>=0.1
